@@ -1,0 +1,6 @@
+{
+  "name": "Akrep Galeri",
+  "description": "3D geçişli, çevrimdışı yapay zekalı (yüz tanıma, nesne algılama), altyazı çevirili gelişmiş medya oynatıcılı ve yüksek güvenlikli ultra premium galeri uygulaması.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
