@@ -31,10 +31,11 @@ class MainActivity : ComponentActivity() {
 
             val theme by vm.themeState.collectAsState()
             val isDark by vm.isDarkThemeState.collectAsState()
+            val dynamicColorScheme by vm.dynamicColorSchemeState.collectAsState()
             val isScreenLocked by vm.isScreenLocked.collectAsState()
             val selectedVideo by vm.selectedMedia.collectAsState()
 
-            ScorpioTheme(appTheme = theme, isDark = isDark) {
+            ScorpioTheme(appTheme = theme, isDark = isDark, dynamicColorScheme = dynamicColorScheme) {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     when {
                         // 1. App is locked by pattern / biometric (Akrep Kalkanı)

@@ -32,6 +32,13 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.drawable.BitmapDrawable
+import androidx.compose.ui.graphics.toArgb
+import androidx.palette.graphics.Palette
+import coil.ImageLoader
+import coil.request.ImageRequest
+import coil.request.SuccessResult
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -40,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
@@ -52,12 +60,12 @@ import com.example.data.MediaFile
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MainGalleryScreen(
     viewModel: GalleryViewModel,
     onVideoSelected: (MediaFile) -> Unit
 ) {
-    val coroutineScope = rememberCoroutineScope()
 
     // Preferences & Settings State
     val selectedTheme by viewModel.themeState.collectAsState()
@@ -78,6 +86,10 @@ fun MainGalleryScreen(
     val isAiAnalyzing by viewModel.aiAnalyzing.collectAsState()
     val aiProgress by viewModel.aiAnalysisProgress.collectAsState()
     
+    // Selection state for multi-select
+    val selectedMediaList by viewModel.selectedMediaList.collectAsState()
+    val isMultiSelectMode = selectedMediaList.isNotEmpty()
+    
     // Local Face Detection States
     val isFaceScanning by viewModel.isFaceScanning.collectAsState()
     val faceScanningProgress by viewModel.faceScanningProgress.collectAsState()
@@ -87,13 +99,35 @@ fun MainGalleryScreen(
     var renamingGroupId by remember { mutableStateOf<String?>(null) }
     var renamingGroupName by remember { mutableStateOf("") }
 
-    val tiltState by rememberAccelerometerTilt()
+    // val tiltState by rememberAccelerometerTilt()
+    val tiltState = Pair(0f, 0f)
 
     // Navigation Tabs & Subviews for Xiaomi Photos Style
     var currentTab by remember { mutableStateOf("FOTOĞRAFLAR") }
     var activeAlbumSubView by remember { mutableStateOf<String?>(null) }
     val mainPagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
     var pendingVaultUnlock by remember { mutableStateOf(false) }
+
+    val context = LocalContext.current
+    val imageLoader = ImageLoader(context)
+    val coroutineScope = rememberCoroutineScope()
+
+    fun updateDynamicTheme(media: MediaFile) {
+        coroutineScope.launch {
+            val request = ImageRequest.Builder(context)
+                .data(media.resourceId)
+                .allowHardware(false)
+                .build()
+            
+            val result = (imageLoader.execute(request) as SuccessResult).drawable
+            val bitmap = (result as BitmapDrawable).bitmap
+            val palette = Palette.from(bitmap).generate()
+            
+            val primaryColor = Color(palette.getDominantColor(Color.Black.toArgb()))
+            val colorScheme = androidx.compose.material3.lightColorScheme(primary = primaryColor)
+            viewModel.setDynamicColorScheme(colorScheme)
+        }
+    }
 
     // Sub-filters for Photos
     var photoFilter by remember { mutableStateOf("ALL") } // "ALL", "ARABA", "MANZARA", "YEMEK", "SCREENSHOTS", "FACES"
@@ -194,27 +228,31 @@ fun MainGalleryScreen(
             }
         }
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(bottom = innerPadding.calculateBottomPadding())
+                .padding(innerPadding)
                 .background(MaterialTheme.colorScheme.background)
-                .pointerInput(Unit) {
-                    detectHorizontalDragGestures { change, dragAmount ->
-                        change.consume()
-                        if (dragAmount < -45f) {
-                            if (currentTab == "FOTOĞRAFLAR") {
-                                currentTab = "ALBÜMLER"
-                            }
-                        } else if (dragAmount > 45f) {
-                            if (currentTab == "ALBÜMLER" || currentTab == "VİDEOLAR" || currentTab == "MÜZİKLER" || currentTab == "AYARLAR") {
-                                currentTab = "FOTOĞRAFLAR"
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectHorizontalDragGestures { change, dragAmount ->
+                            change.consume()
+                            if (dragAmount < -45f) {
+                                if (currentTab == "FOTOĞRAFLAR") {
+                                    currentTab = "ALBÜMLER"
+                                }
+                            } else if (dragAmount > 45f) {
+                                if (currentTab == "ALBÜMLER" || currentTab == "VİDEOLAR" || currentTab == "MÜZİKLER" || currentTab == "AYARLAR") {
+                                    currentTab = "FOTOĞRAFLAR"
+                                }
                             }
                         }
                     }
-                }
-        ) {
-            // Xiaomi Redmi Note 14 Pro 5G Style Unified Header
+            ) {
+                // Xiaomi Redmi Note 14 Pro 5G Style Unified Header
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -280,6 +318,22 @@ fun MainGalleryScreen(
                     .fillMaxWidth()
             ) {
                 when (currentTab) {
+                    "SECURE_LOCK" -> {
+                        SecurityLockScreen(
+                            viewModel = viewModel,
+                            onUnlocked = {
+                                currentTab = "VAULT"
+                            }
+                        )
+                    }
+                    "VAULT" -> {
+                        SecureVaultScreen(
+                            viewModel = viewModel,
+                            onBack = {
+                                currentTab = "FOTOĞRAFLAR"
+                            }
+                        )
+                    }
                     "FOTOĞRAFLAR" -> {
                         Column(modifier = Modifier.fillMaxSize()) {
                             // Horizontal Face Groups Row (Xiaomi Style circular avatars)
@@ -695,14 +749,19 @@ fun MainGalleryScreen(
                                             0f
                                         }
 
-                                        // Apply 3D accelerometer tilt + scroll-based parallax transformations
-                                        val cardRotationX = tiltState.second * 1.5f + (relativeToCenter * -4f)
-                                        val cardRotationY = tiltState.first * 1.5f
-                                        val cardTranslationX = tiltState.first * 0.8f
-                                        val cardTranslationY = tiltState.second * 0.8f
+                                        // val cardRotationX = tiltState.second * 1.5f + (relativeToCenter * -4f)
+                                        // val cardRotationY = tiltState.first * 1.5f
+                                        // val cardTranslationX = tiltState.first * 0.8f
+                                        // val cardTranslationY = tiltState.second * 0.8f
+                                        val cardRotationX = 0f
+                                        val cardRotationY = 0f
+                                        val cardTranslationX = 0f
+                                        val cardTranslationY = 0f
 
-                                        val imgTranslationX = -tiltState.first * 1.5f
-                                        val imgTranslationY = -tiltState.second * 1.5f - (relativeToCenter * 12f)
+                                        // val imgTranslationX = -tiltState.first * 1.5f
+                                        // val imgTranslationY = -tiltState.second * 1.5f - (relativeToCenter * 12f)
+                                        val imgTranslationX = 0f
+                                        val imgTranslationY = 0f
 
                                         Box(
                                             modifier = Modifier
@@ -719,9 +778,16 @@ fun MainGalleryScreen(
                                                 }
                                                 .clip(RoundedCornerShape(16.dp))
                                                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                                                .clickable {
-                                                    viewModel.selectedMedia.value = image
-                                                }
+                                                .combinedClickable(
+                                                    onLongClick = { viewModel.toggleSelection(image) },
+                                                    onClick = {
+                                                        if (isMultiSelectMode) viewModel.toggleSelection(image)
+                                                        else {
+                                                            viewModel.selectedMedia.value = image
+                                                            updateDynamicTheme(image)
+                                                        }
+                                                    }
+                                                )
                                         ) {
                                             AsyncImage(
                                                 model = image.resourceId,
@@ -736,6 +802,14 @@ fun MainGalleryScreen(
                                                     },
                                                 contentScale = ContentScale.Crop
                                             )
+                                            
+                                            if (isMultiSelectMode) {
+                                                Checkbox(
+                                                    checked = selectedMediaList.contains(image),
+                                                    onCheckedChange = { viewModel.toggleSelection(image) },
+                                                    modifier = Modifier.align(Alignment.TopEnd)
+                                                )
+                                            }
 
                                             // Highlight tag overlay
                                             Box(
@@ -1166,6 +1240,7 @@ fun MainGalleryScreen(
                                     Triple("Tüm Fotoğraflar", "📸", "FOTOĞRAFLAR"),
                                     Triple("Videolar", "🎬", "VİDEOLAR"),
                                     Triple("Müzikler", "🎧", "MÜZİKLER"),
+                                    Triple("Güvenli Klasör", "🔒", "VAULT"),
                                     Triple("Ayarlar", "⚙️", "AYARLAR")
                                 )
 
@@ -1187,6 +1262,12 @@ fun MainGalleryScreen(
                                                         photoFilter = "ALL"
                                                         selectedFaceGroupId = null
                                                         currentTab = "FOTOĞRAFLAR"
+                                                    } else if (destinationTab == "VAULT") {
+                                                        if (viewModel.isLockActiveState.value) {
+                                                            currentTab = "SECURE_LOCK"
+                                                        } else {
+                                                            currentTab = "VAULT"
+                                                        }
                                                     } else {
                                                         currentTab = destinationTab
                                                     }
@@ -2350,8 +2431,18 @@ fun MainGalleryScreen(
                 }
 
                 // Rename Input Dialog Overlay
-                if (showRenameInput) {
-                    Dialog(onDismissRequest = { showRenameInput = false }) {
+                AnimatedVisibility(
+                    visible = showRenameInput,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { it })
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.5f))
+                            .clickable { showRenameInput = false },
+                        contentAlignment = Alignment.Center
+                    ) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2359,6 +2450,7 @@ fun MainGalleryScreen(
                                 .background(Color(0xFF0E1118), RoundedCornerShape(24.dp))
                                 .border(1.dp, Color(0xFFD500F9).copy(alpha = 0.4f), RoundedCornerShape(24.dp))
                                 .padding(24.dp)
+                                .clickable(enabled = false) {} // Disable click-through
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Icon(
@@ -2378,6 +2470,7 @@ fun MainGalleryScreen(
                                 OutlinedTextField(
                                     value = renameText,
                                     onValueChange = { renameText = it },
+                                    label = { Text("Dosya Adı", color = Color.White.copy(alpha = 0.5f)) },
                                     colors = OutlinedTextFieldDefaults.colors(
                                         focusedBorderColor = Color(0xFFD500F9),
                                         unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
@@ -2388,6 +2481,15 @@ fun MainGalleryScreen(
                                     singleLine = true,
                                     shape = RoundedCornerShape(12.dp)
                                 )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text("Gelişmiş Düzenleme", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(onClick = { /* TODO */ }, modifier = Modifier.weight(1f)) { Text("Efektler") }
+                                    Button(onClick = { /* TODO */ }, modifier = Modifier.weight(1f)) { Text("HD") }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(onClick = { /* TODO */ }, modifier = Modifier.fillMaxWidth()) { Text("Yapay Zeka Otomatik Düzenleme") }
                                 Spacer(modifier = Modifier.height(24.dp))
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -2425,176 +2527,9 @@ fun MainGalleryScreen(
         }
     }
 }
-
-@Composable
-fun LuxuryNavIcon(
-    emoji: String,
-    isSelected: Boolean,
-    activeColor: Color,
-    modifier: Modifier = Modifier
-) {
-    val scale by animateFloatAsState(
-        targetValue = if (isSelected) 1.25f else 1.0f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessLow
-        ),
-        label = "iconScale"
-    )
-
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = modifier
-            .size(56.dp)
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
-    ) {
-        // Ambient glow under active item
-        if (isSelected) {
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .background(
-                        brush = Brush.radialGradient(
-                            colors = listOf(
-                                activeColor.copy(alpha = 0.45f),
-                                activeColor.copy(alpha = 0.12f),
-                                Color.Transparent
-                            )
-                        ),
-                        shape = CircleShape
-                    )
-            )
-        }
-
-        // 3D Glassmorphic Capsule with premium metallic outline
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(42.dp)
-                .clip(CircleShape)
-                .background(
-                    brush = Brush.verticalGradient(
-                        colors = if (isSelected) {
-                            listOf(
-                                Color.White.copy(alpha = 0.22f),
-                                Color.Black.copy(alpha = 0.45f)
-                            )
-                        } else {
-                            listOf(
-                                Color.White.copy(alpha = 0.08f),
-                                Color.Black.copy(alpha = 0.25f)
-                            )
-                        }
-                    )
-                )
-                .border(
-                    width = if (isSelected) 1.5.dp else 1.dp,
-                    brush = Brush.verticalGradient(
-                        colors = if (isSelected) {
-                            listOf(
-                                activeColor.copy(alpha = 0.95f),
-                                activeColor.copy(alpha = 0.40f),
-                                activeColor.copy(alpha = 0.85f)
-                            )
-                        } else {
-                            listOf(
-                                Color.White.copy(alpha = 0.15f),
-                                Color.White.copy(alpha = 0.03f)
-                            )
-                        }
-                    ),
-                    shape = CircleShape
-                )
-        ) {
-            // The emoji itself
-            Text(
-                text = emoji,
-                fontSize = 20.sp,
-                modifier = Modifier.graphicsLayer {
-                    shadowElevation = if (isSelected) 6f else 0f
-                }
-            )
-
-            // Dynamic glossy glass shine overlay
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        brush = Brush.linearGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = 0.22f),
-                                Color.White.copy(alpha = 0.05f),
-                                Color.Transparent,
-                                Color.Transparent
-                            ),
-                            start = Offset(0f, 0f),
-                            end = Offset(80f, 80f)
-                        )
-                    )
-            )
-        }
-
-        // High-end active micro-dot
-        if (isSelected) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 2.dp)
-                    .size(width = 10.dp, height = 3.dp)
-                    .background(
-                        brush = Brush.horizontalGradient(
-                            colors = listOf(activeColor, activeColor.copy(alpha = 0.6f))
-                        ),
-                        shape = RoundedCornerShape(1.5.dp)
-                    )
-            )
-        }
-    }
 }
 
-@Composable
-fun rememberAccelerometerTilt(): State<Pair<Float, Float>> {
-    val context = LocalContext.current
-    val tiltState = remember { mutableStateOf(Pair(0f, 0f)) }
-    
-    DisposableEffect(context) {
-        val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
-        val accelerometer = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-        
-        val listener = object : SensorEventListener {
-            private var lastX = 0f
-            private var lastY = 0f
-            private val alpha = 0.12f // Low pass filter factor for buttery smoothness
-            
-            override fun onSensorChanged(event: SensorEvent?) {
-                if (event == null) return
-                val rawX = event.values[0]
-                val rawY = event.values[1]
-                
-                lastX = lastX + alpha * (rawX - lastX)
-                lastY = lastY + alpha * (rawY - lastY)
-                
-                val smoothX = lastX.coerceIn(-10f, 10f)
-                val smoothY = lastY.coerceIn(-10f, 10f)
-                
-                tiltState.value = Pair(-smoothX, smoothY)
-            }
-            
-            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
-        }
-        
-        if (sensorManager != null && accelerometer != null) {
-            sensorManager.registerListener(listener, accelerometer, SensorManager.SENSOR_DELAY_UI)
-        }
-        
-        onDispose {
-            sensorManager?.unregisterListener(listener)
-        }
-    }
-    
-    return tiltState
-}
+
+
+
 

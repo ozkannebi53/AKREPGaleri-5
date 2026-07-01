@@ -16,6 +16,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     // UI States
     val themeState = MutableStateFlow(settings.theme)
+    val dynamicColorSchemeState = MutableStateFlow<androidx.compose.material3.ColorScheme?>(null)
     val isDarkThemeState = MutableStateFlow(settings.isDarkTheme)
     val isBiometricEnabledState = MutableStateFlow(settings.isBiometricEnabled)
     val isLockActiveState = MutableStateFlow(settings.isLockActive)
@@ -44,6 +45,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     // Active Categories / Selected Files
     val selectedMedia = MutableStateFlow<MediaFile?>(null)
+    val selectedMediaList = MutableStateFlow<Set<MediaFile>>(emptySet())
     val aiAnalyzing = MutableStateFlow(false)
     val aiAnalysisProgress = MutableStateFlow(0f)
 
@@ -191,6 +193,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun updateTheme(newTheme: AppTheme) {
         settings.theme = newTheme
         themeState.value = newTheme
+    }
+
+    fun setDynamicColorScheme(colorScheme: androidx.compose.material3.ColorScheme?) {
+        dynamicColorSchemeState.value = colorScheme
     }
 
     fun toggleDarkTheme(isDark: Boolean) {
@@ -466,9 +472,37 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun toggleSelection(media: MediaFile) {
+        val current = selectedMediaList.value.toMutableSet()
+        if (current.contains(media)) {
+            current.remove(media)
+        } else {
+            current.add(media)
+        }
+        selectedMediaList.value = current
+    }
+
+    fun clearSelection() {
+        selectedMediaList.value = emptySet()
+    }
+
+    fun deleteSelectedMedia() {
+        viewModelScope.launch {
+            selectedMediaList.value.forEach { repository.deleteMedia(it.id) }
+            clearSelection()
+        }
+    }
+
     fun deleteMedia(id: Int) {
         viewModelScope.launch {
             repository.deleteMedia(id)
+        }
+    }
+
+    fun moveSelectedMediaToVault() {
+        viewModelScope.launch {
+            selectedMediaList.value.forEach { repository.updateVaultStatus(it.id, true) }
+            clearSelection()
         }
     }
 

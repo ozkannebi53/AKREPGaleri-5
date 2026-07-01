@@ -78,9 +78,10 @@ private val MidnightColorScheme = darkColorScheme(
 fun ScorpioTheme(
     appTheme: AppTheme = AppTheme.IOS_SILVER,
     isDark: Boolean = isSystemInDarkTheme(),
+    dynamicColorScheme: androidx.compose.material3.ColorScheme? = null,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when (appTheme) {
+    val colorScheme = dynamicColorScheme ?: when (appTheme) {
         AppTheme.OBSIDIAN_BLACK -> ObsidianColorScheme
         AppTheme.IOS_SILVER -> if (isDark) SilverDarkColorScheme else SilverLightColorScheme
         AppTheme.CYBER_EMERALD -> EmeraldColorScheme
