@@ -6,6 +6,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -71,6 +73,10 @@ fun SecurityLockScreen(
     // Saved PIN exists checking
     val isSettingNewPin = remember { viewModel.settings.patternPin == null }
 
+    var showBiometricScanDialog by remember { mutableStateOf(false) }
+    var scanningProgress by remember { mutableStateOf(0f) }
+    var scanningStatus by remember { mutableStateOf("") }
+
     // Floating dynamic particles/orbs in background
     val infiniteTransition = rememberInfiniteTransition(label = "cosmic_bg")
     val orbitProgress by infiniteTransition.animateFloat(
@@ -118,6 +124,12 @@ fun SecurityLockScreen(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
         permissionsGranted = results.values.all { it }
+    }
+
+    LaunchedEffect(permissionsGranted) {
+        if (permissionsGranted) {
+            viewModel.loadDeviceMedia()
+        }
     }
 
     // Interactive Real-Time Cybernetic Clock
@@ -522,7 +534,7 @@ fun SecurityLockScreen(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
                         ) {
-                            viewModel.simulateBiometricSuccess()
+                            showBiometricScanDialog = true
                         },
                     colors = CardDefaults.cardColors(
                         containerColor = Color.White.copy(alpha = 0.02f)
@@ -564,6 +576,154 @@ fun SecurityLockScreen(
                             modifier = Modifier.padding(top = 2.dp)
                         )
                     }
+                }
+            }
+
+            if (showBiometricScanDialog) {
+                Dialog(
+                    onDismissRequest = { showBiometricScanDialog = false },
+                    properties = DialogProperties(usePlatformDefaultWidth = false)
+                ) {
+                    Card(
+                        modifier = Modifier
+                            .width(320.dp)
+                            .wrapContentHeight()
+                            .padding(16.dp)
+                            .shadow(24.dp, RoundedCornerShape(28.dp))
+                            .border(2.dp, Color(0xFF00E5FF), RoundedCornerShape(28.dp)),
+                        shape = RoundedCornerShape(28.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFF050508)
+                        )
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(24.dp)
+                        ) {
+                            Text(
+                                text = "AKREP BİYOMETRİK KALKAN",
+                                color = Color(0xFFE5A93B),
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 14.sp,
+                                letterSpacing = 1.5.sp
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "GERÇEK ZAMANLI PARMAK İZİ ANALİZİ",
+                                color = Color.White.copy(alpha = 0.6f),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+
+                            Spacer(modifier = Modifier.height(30.dp))
+
+                            // Animated Fingerprint Scan Area with Laser line
+                            Box(
+                                modifier = Modifier
+                                    .size(140.dp)
+                                    .background(Color(0xFF0E1118), CircleShape)
+                                    .border(1.dp, Color(0xFF00E5FF).copy(alpha = 0.3f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                // Fingerprint Icon
+                                Icon(
+                                    imageVector = Icons.Default.Fingerprint,
+                                    contentDescription = "Parmak İzi",
+                                    tint = Color(0xFF00E5FF).copy(alpha = 0.3f + (scanningProgress * 0.7f)),
+                                    modifier = Modifier.size(80.dp)
+                                )
+
+                                // Laser line animation
+                                val laserTransition = rememberInfiniteTransition(label = "laser")
+                                val laserY by laserTransition.animateFloat(
+                                    initialValue = 0f,
+                                    targetValue = 140f,
+                                    animationSpec = infiniteRepeatable(
+                                        animation = tween(1500, easing = EaseInOutSine),
+                                        repeatMode = RepeatMode.Reverse
+                                    ),
+                                    label = "laser_y"
+                                )
+
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(2.dp)
+                                        .offset(y = (laserY - 70f).dp)
+                                        .background(
+                                            Brush.horizontalGradient(
+                                                listOf(Color.Transparent, Color(0xFF00E5FF), Color.Transparent)
+                                            )
+                                        )
+                                        .shadow(8.dp, spotColor = Color(0xFF00E5FF))
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(24.dp))
+
+                            // Progress indicators
+                            Text(
+                                text = scanningStatus.uppercase(),
+                                color = Color(0xFF00E5FF),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                textAlign = TextAlign.Center
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            LinearProgressIndicator(
+                                progress = { scanningProgress },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(4.dp)
+                                    .clip(RoundedCornerShape(2.dp)),
+                                color = Color(0xFF00E5FF),
+                                trackColor = Color.White.copy(alpha = 0.08f)
+                            )
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            TextButton(
+                                onClick = { showBiometricScanDialog = false },
+                                colors = ButtonDefaults.textButtonColors(
+                                    contentColor = Color.White.copy(alpha = 0.5f)
+                                )
+                            ) {
+                                Text("İPTAL ET", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                // Animated scan routine
+                LaunchedEffect(showBiometricScanDialog) {
+                    scanningProgress = 0f
+                    scanningStatus = "Biyometrik sensörler başlatılıyor..."
+                    delay(800)
+                    
+                    scanningProgress = 0.3f
+                    scanningStatus = "Parmak izi deseni taranıyor..."
+                    delay(900)
+                    
+                    scanningProgress = 0.65f
+                    scanningStatus = "Akrep Kalkanı şifreleme eşleşmesi..."
+                    delay(800)
+                    
+                    scanningProgress = 0.9f
+                    scanningStatus = "Erişim protokolü doğrulanıyor..."
+                    delay(600)
+                    
+                    scanningProgress = 1.0f
+                    scanningStatus = "Erişim Onaylandı!"
+                    delay(500)
+                    
+                    showBiometricScanDialog = false
+                    viewModel.unlockStatusMessage.value = "Giriş Başarılı!"
+                    viewModel.isScreenLocked.value = false
+                    viewModel.isPatternError.value = false
+                    onUnlocked()
                 }
             }
 

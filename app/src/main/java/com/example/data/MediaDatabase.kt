@@ -96,6 +96,9 @@ interface MediaDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSubtitle(subtitle: SubtitleCache)
+
+    @Query("DELETE FROM subtitle_caches WHERE mediaId = :mediaId")
+    suspend fun deleteSubtitlesForMedia(mediaId: Int)
 }
 
 @Database(entities = [MediaFile::class, FaceGroup::class, SubtitleCache::class], version = 1, exportSchema = false)
@@ -143,4 +146,5 @@ class MediaRepository(private val mediaDao: MediaDao) {
 
     suspend fun getSubtitles(mediaId: Int) = mediaDao.getSubtitlesForMedia(mediaId)
     suspend fun insertSubtitle(sub: SubtitleCache) = mediaDao.insertSubtitle(sub)
+    suspend fun deleteSubtitles(mediaId: Int) = mediaDao.deleteSubtitlesForMedia(mediaId)
 }

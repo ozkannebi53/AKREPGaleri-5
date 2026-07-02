@@ -1,5 +1,6 @@
 package com.example.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -115,7 +116,7 @@ fun MainGalleryScreen(
     fun updateDynamicTheme(media: MediaFile) {
         coroutineScope.launch {
             val request = ImageRequest.Builder(context)
-                .data(media.resourceId)
+                .data(if (media.resourceId != 0) media.resourceId else media.uri)
                 .allowHardware(false)
                 .build()
             
@@ -132,6 +133,23 @@ fun MainGalleryScreen(
     // Sub-filters for Photos
     var photoFilter by remember { mutableStateOf("ALL") } // "ALL", "ARABA", "MANZARA", "YEMEK", "SCREENSHOTS", "FACES"
     var selectedFaceGroupId by remember { mutableStateOf<String?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
+
+    // Back Button Handler (Intercepts back clicks to prevent exiting the app when views are active)
+    val activeDetailImageForBack by viewModel.selectedMedia.collectAsState()
+    BackHandler(enabled = activeDetailImageForBack != null || isMultiSelectMode || activeAlbumSubView != null) {
+        when {
+            activeDetailImageForBack != null -> {
+                viewModel.selectedMedia.value = null
+            }
+            isMultiSelectMode -> {
+                viewModel.clearSelection()
+            }
+            activeAlbumSubView != null -> {
+                activeAlbumSubView = null
+            }
+        }
+    }
 
     // Audio background active playback track
     val activeAudio by viewModel.playingAudio.collectAsState()
@@ -336,6 +354,32 @@ fun MainGalleryScreen(
                     }
                     "FOTOĞRAFLAR" -> {
                         Column(modifier = Modifier.fillMaxSize()) {
+                            // Beautiful Compact Pill-shaped Search Bar
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                placeholder = { Text("Galeri içinde ara... ('araba', 'kedi', 'plaj' vb.)", fontSize = 13.sp) },
+                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Ara", modifier = Modifier.size(18.dp)) },
+                                trailingIcon = {
+                                    if (searchQuery.isNotEmpty()) {
+                                        IconButton(onClick = { searchQuery = "" }) {
+                                            Icon(Icons.Default.Clear, contentDescription = "Temizle", modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                },
+                                singleLine = true,
+                                shape = RoundedCornerShape(24.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f),
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+                                )
+                            )
+
                             // Horizontal Face Groups Row (Xiaomi Style circular avatars)
                             if (faceGroupsList.isNotEmpty()) {
                                 Text(
@@ -692,13 +736,23 @@ fun MainGalleryScreen(
                             }
 
                             // Filtered Images Grid Layout
-                            val filteredImages = remember(imagesList, screenshotsList, photoFilter, selectedFaceGroupId) {
-                                when {
+                            val filteredImages = remember(imagesList, screenshotsList, photoFilter, selectedFaceGroupId, searchQuery) {
+                                val baseList = when {
                                     photoFilter == "SCREENSHOTS" -> screenshotsList
                                     photoFilter == "FACES" && selectedFaceGroupId != null -> imagesList.filter { it.faceGroupId == selectedFaceGroupId }
                                     photoFilter == "FACES" && selectedFaceGroupId == null -> imagesList.filter { it.faceGroupId != null }
                                     photoFilter != "ALL" -> imagesList.filter { it.objectClass == photoFilter.lowercase().replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() } || it.objectClass == photoFilter }
                                     else -> imagesList
+                                }
+                                if (searchQuery.isBlank()) {
+                                    baseList
+                                } else {
+                                    baseList.filter { media ->
+                                        media.name.contains(searchQuery, ignoreCase = true) ||
+                                        media.objectClass?.contains(searchQuery, ignoreCase = true) == true ||
+                                        media.location?.contains(searchQuery, ignoreCase = true) == true ||
+                                        media.event?.contains(searchQuery, ignoreCase = true) == true
+                                    }
                                 }
                             }
 
@@ -790,7 +844,7 @@ fun MainGalleryScreen(
                                                 )
                                         ) {
                                             AsyncImage(
-                                                model = image.resourceId,
+                                                model = if (image.resourceId != 0) image.resourceId else image.uri,
                                                 contentDescription = image.name,
                                                 modifier = Modifier
                                                     .fillMaxSize()
@@ -1007,7 +1061,7 @@ fun MainGalleryScreen(
                                                 .height(130.dp)
                                         ) {
                                             AsyncImage(
-                                                model = video.resourceId,
+                                                model = if (video.resourceId != 0) video.resourceId else video.uri,
                                                 contentDescription = video.name,
                                                 modifier = Modifier.fillMaxSize(),
                                                 contentScale = ContentScale.Crop
@@ -1200,7 +1254,7 @@ fun MainGalleryScreen(
                                                     .clickable { viewModel.selectedMedia.value = item }
                                             ) {
                                                 AsyncImage(
-                                                    model = item.resourceId,
+                                                    model = if (item.resourceId != 0) item.resourceId else item.uri,
                                                     contentDescription = item.name,
                                                     modifier = Modifier.fillMaxSize(),
                                                     contentScale = ContentScale.Crop
@@ -1341,14 +1395,14 @@ fun MainGalleryScreen(
 
                                 Spacer(modifier = Modifier.height(24.dp))
                                 Text(
-                                    text = "3B Akrep Albüm Motoru",
+                                    text = "Albümler",
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.align(Alignment.Start).padding(start = 20.dp, bottom = 4.dp)
                                 )
                                 Text(
-                                    text = "Albümleri 3 boyutlu derinlikte gezinmek için kaydırın",
+                                    text = "Fotoğraflarınızı ve videolarınızı kategorilerine göre gezin",
                                     fontSize = 10.sp,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                                     modifier = Modifier.align(Alignment.Start).padding(start = 20.dp, bottom = 12.dp)
@@ -1459,11 +1513,11 @@ fun MainGalleryScreen(
                                                             .clip(CircleShape)
                                                             .background(
                                                                 when (themeOption) {
-                                                                    AppTheme.IOS_SILVER -> Color(0xFF007AFF)
-                                                                    AppTheme.OBSIDIAN_BLACK -> Color(0xFFFF453A)
+                                                                    AppTheme.IOS_SILVER -> Color(0xFFC0C0C0)
+                                                                    AppTheme.OBSIDIAN_BLACK -> Color(0xFF121212)
                                                                     AppTheme.CYBER_EMERALD -> Color(0xFF00FF66)
                                                                     AppTheme.SOLAR_GOLD -> Color(0xFFFFB300)
-                                                                    AppTheme.MIDNIGHT_BLUE -> Color(0xFF00A2FF)
+                                                                    AppTheme.MIDNIGHT_BLUE -> Color(0xFF007AFF)
                                                                 }
                                                             )
                                                             .border(
@@ -1684,6 +1738,147 @@ fun MainGalleryScreen(
                     }
                 }
             }
+
+            // 8. CYBERNETIC FLOATING MULTI-SELECTION ACTION PANEL
+            Box(modifier = Modifier.fillMaxSize()) {
+                androidx.compose.animation.AnimatedVisibility(
+                visible = isMultiSelectMode,
+                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 16.dp)
+            ) {
+                Card(
+                        modifier = Modifier
+                            .fillMaxWidth(0.92f)
+                            .height(72.dp)
+                            .shadow(16.dp, RoundedCornerShape(36.dp)),
+                        shape = RoundedCornerShape(36.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFF0F111A).copy(alpha = 0.92f)
+                        ),
+                        border = BorderStroke(
+                            width = 1.2.dp,
+                            brush = Brush.horizontalGradient(
+                                listOf(Color(0xFF00FF66).copy(alpha = 0.4f), Color(0xFF00E5FF).copy(alpha = 0.4f))
+                            )
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 24.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            // Left: Selected count and cancel
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(
+                                    onClick = { viewModel.clearSelection() },
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .background(Color.White.copy(alpha = 0.08f), CircleShape)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Seçimi Temizle",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "${selectedMediaList.size} SEÇİLİ",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 12.sp,
+                                        letterSpacing = 1.sp,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                    )
+                                    Text(
+                                        text = "Vazgeçmek için çarpıya basın",
+                                        color = Color.White.copy(alpha = 0.4f),
+                                        fontSize = 9.sp
+                                    )
+                                }
+                            }
+
+                            // Right: Interactive Action Buttons
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                // 1. Vault / Lock action
+                                IconButton(
+                                    onClick = {
+                                        // Lock selected items
+                                        selectedMediaList.forEach { item ->
+                                            viewModel.toggleVaultStatus(item.id, true)
+                                        }
+                                        viewModel.clearSelection()
+                                        viewModel.unlockStatusMessage.value = "Seçilen dosyalar Akrep Kalkanı kasasına kilitlendi!"
+                                    },
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .background(Color(0xFFFF3D00).copy(alpha = 0.15f), CircleShape)
+                                        .border(1.dp, Color(0xFFFF3D00).copy(alpha = 0.4f), CircleShape)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Lock,
+                                        contentDescription = "Kasaya Kilitle",
+                                        tint = Color(0xFFFF6E40),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+
+                                // 2. Delete action
+                                IconButton(
+                                    onClick = {
+                                        // Delete selected items
+                                        selectedMediaList.forEach { item ->
+                                            viewModel.deleteMedia(item.id)
+                                        }
+                                        viewModel.clearSelection()
+                                        viewModel.unlockStatusMessage.value = "Seçilen dosyalar kalıcı olarak silindi!"
+                                    },
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .background(Color(0xFFFF1744).copy(alpha = 0.15f), CircleShape)
+                                        .border(1.dp, Color(0xFFFF1744).copy(alpha = 0.4f), CircleShape)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Sil",
+                                        tint = Color(0xFFFF5252),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+
+                                // 3. Share Simulation Action
+                                IconButton(
+                                    onClick = {
+                                        viewModel.clearSelection()
+                                        viewModel.unlockStatusMessage.value = "Dosyalar paylaşıma hazırlandı (Simüle Edildi)!"
+                                    },
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .background(Color(0xFF00E5FF).copy(alpha = 0.15f), CircleShape)
+                                        .border(1.dp, Color(0xFF00E5FF).copy(alpha = 0.4f), CircleShape)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Share,
+                                        contentDescription = "Paylaş",
+                                        tint = Color(0xFF00E5FF),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1841,6 +2036,32 @@ fun MainGalleryScreen(
         var showRenameInput by remember { mutableStateOf(false) }
         var renameText by remember { mutableStateOf("") }
         val activeItem = if (currentPhotoList.isNotEmpty() && pagerState.currentPage in currentPhotoList.indices) currentPhotoList[pagerState.currentPage] else null
+
+        // Undo/Redo AI Edit Stack states
+        var editHistory by remember { mutableStateOf(listOf("Orijinal")) }
+        var historyIndex by remember { mutableIntStateOf(0) }
+
+        // Reset history on active item swap
+        val activeMediaId = activeItem?.id ?: -1
+        LaunchedEffect(activeMediaId) {
+            if (activeMediaId != -1) {
+                editHistory = listOf("Orijinal")
+                historyIndex = 0
+            }
+        }
+
+        // Rehydrate states from history
+        val activeSteps = remember(editHistory, historyIndex) {
+            if (historyIndex in editHistory.indices) {
+                editHistory.subList(0, historyIndex + 1)
+            } else {
+                listOf("Orijinal")
+            }
+        }
+
+        val isHdActive = activeSteps.contains("HD Geliştirme")
+        val isAiBeautified = activeSteps.contains("Yapay Zeka Güzelleştirme")
+        val activeFilter = activeSteps.lastOrNull { it.startsWith("Filtre: ") }?.substringAfter("Filtre: ") ?: "Yok"
 
         // Slide/zoom & 3D Depth parameters
         val imageScale by animateFloatAsState(
@@ -2036,16 +2257,101 @@ fun MainGalleryScreen(
                                     )
                                 ) {
                                     Box(modifier = Modifier.fillMaxSize()) {
+                                        val colorMatrix = remember(isHdActive, isAiBeautified, activeFilter) {
+                                            androidx.compose.ui.graphics.ColorMatrix().apply {
+                                                if (activeFilter == "Sepia") {
+                                                    set(0, 0, 0.393f)
+                                                    set(0, 1, 0.769f)
+                                                    set(0, 2, 0.189f)
+                                                    set(1, 0, 0.349f)
+                                                    set(1, 1, 0.686f)
+                                                    set(1, 2, 0.168f)
+                                                    set(2, 0, 0.272f)
+                                                    set(2, 1, 0.534f)
+                                                    set(2, 2, 0.131f)
+                                                }
+                                                
+                                                if (activeFilter == "Monochrome") {
+                                                    setToSaturation(0f)
+                                                }
+                                                
+                                                if (activeFilter == "Cyber") {
+                                                    set(0, 0, 1.2f)
+                                                    set(1, 1, 0.7f)
+                                                    set(2, 2, 1.4f)
+                                                }
+
+                                                if (activeFilter == "Vintage") {
+                                                    set(0, 0, 1.15f)
+                                                    set(1, 1, 0.95f)
+                                                    set(2, 2, 0.82f)
+                                                }
+
+                                                if (isHdActive) {
+                                                    val contrast = 1.35f
+                                                    val scale = contrast
+                                                    set(0, 0, scale)
+                                                    set(1, 1, scale)
+                                                    set(2, 2, scale)
+                                                }
+                                                
+                                                if (isAiBeautified) {
+                                                    set(0, 0, 1.05f)
+                                                    set(1, 1, 1.02f)
+                                                    set(2, 2, 0.95f)
+                                                }
+                                            }
+                                        }
+
                                         AsyncImage(
-                                            model = item.resourceId,
+                                            model = if (item.resourceId != 0) item.resourceId else item.uri,
                                             contentDescription = item.name,
                                             modifier = Modifier
                                                 .fillMaxSize()
                                                 .graphicsLayer {
                                                     rotationZ = imageRotation
                                                 },
-                                            contentScale = ContentScale.Fit
+                                            contentScale = ContentScale.Fit,
+                                            colorFilter = if (activeFilter != "Yok" || isHdActive || isAiBeautified) {
+                                                androidx.compose.ui.graphics.ColorFilter.colorMatrix(colorMatrix)
+                                            } else null
                                         )
+
+                                        // Active AI Badges on Image
+                                        Row(
+                                            modifier = Modifier
+                                                .align(Alignment.TopStart)
+                                                .padding(16.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            if (isHdActive) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .background(Color(0xFF00E5FF), RoundedCornerShape(6.dp))
+                                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                                ) {
+                                                    Text("⚡ HD NETLEŞTİRME", color = Color.Black, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+                                            if (isAiBeautified) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .background(Color(0xFFD500F9), RoundedCornerShape(6.dp))
+                                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                                ) {
+                                                    Text("✨ YAPAY ZEKA GÜZELLİK", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+                                            if (activeFilter != "Yok") {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .background(Color(0xFFFFD700), RoundedCornerShape(6.dp))
+                                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                                ) {
+                                                    Text("FİLTRE: ${activeFilter.uppercase()}", color = Color.Black, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+                                        }
                                         
                                         // Removed title text here
                                         /* 
@@ -2482,14 +2788,226 @@ fun MainGalleryScreen(
                                     shape = RoundedCornerShape(12.dp)
                                 )
                                 Spacer(modifier = Modifier.height(16.dp))
-                                Text("Gelişmiş Düzenleme", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Button(onClick = { /* TODO */ }, modifier = Modifier.weight(1f)) { Text("Efektler") }
-                                    Button(onClick = { /* TODO */ }, modifier = Modifier.weight(1f)) { Text("HD") }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Yapay Zeka Fotoğraf Düzenleyici", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        // Geri Al (Undo)
+                                        IconButton(
+                                            onClick = { if (historyIndex > 0) historyIndex-- },
+                                            enabled = historyIndex > 0,
+                                            modifier = Modifier.size(36.dp).background(if (historyIndex > 0) Color.White.copy(alpha = 0.1f) else Color.Transparent, CircleShape)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Undo,
+                                                contentDescription = "Geri Al",
+                                                tint = if (historyIndex > 0) Color(0xFF00E5FF) else Color.Gray,
+                                                modifier = Modifier.size(20.dp)
+                                             )
+                                        }
+                                        
+                                        // Yinele (Redo)
+                                        IconButton(
+                                            onClick = { if (historyIndex < editHistory.lastIndex) historyIndex++ },
+                                            enabled = historyIndex < editHistory.lastIndex,
+                                            modifier = Modifier.size(36.dp).background(if (historyIndex < editHistory.lastIndex) Color.White.copy(alpha = 0.1f) else Color.Transparent, CircleShape)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Redo,
+                                                contentDescription = "Yinele",
+                                                tint = if (historyIndex < editHistory.lastIndex) Color(0xFF00E5FF) else Color.Gray,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+
+                                        // Sıfırla (Reset)
+                                        IconButton(
+                                            onClick = {
+                                                editHistory = listOf("Orijinal")
+                                                historyIndex = 0
+                                            },
+                                            enabled = historyIndex > 0,
+                                            modifier = Modifier.size(36.dp).background(if (historyIndex > 0) Color.White.copy(alpha = 0.1f) else Color.Transparent, CircleShape)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Refresh,
+                                                contentDescription = "Sıfırla",
+                                                tint = if (historyIndex > 0) Color(0xFFFF3D00) else Color.Gray,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
                                 }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Button(onClick = { /* TODO */ }, modifier = Modifier.fillMaxWidth()) { Text("Yapay Zeka Otomatik Düzenleme") }
+                                
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                // Visual History Timeline
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                                        .padding(8.dp)
+                                ) {
+                                    LazyRow(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        items(editHistory.size) { index ->
+                                            val step = editHistory[index]
+                                            val isCurrent = index == historyIndex
+                                            val isPassed = index < historyIndex
+                                            
+                                            Box(
+                                                modifier = Modifier
+                                                    .background(
+                                                        when {
+                                                            isCurrent -> Color(0xFF00E5FF).copy(alpha = 0.25f)
+                                                            isPassed -> Color.White.copy(alpha = 0.08f)
+                                                            else -> Color.White.copy(alpha = 0.02f)
+                                                        },
+                                                        RoundedCornerShape(6.dp)
+                                                    )
+                                                    .border(
+                                                        1.dp,
+                                                        if (isCurrent) Color(0xFF00E5FF) else Color.Transparent,
+                                                        RoundedCornerShape(6.dp)
+                                                    )
+                                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                                                    .clickable { historyIndex = index }
+                                            ) {
+                                                Text(
+                                                    text = step,
+                                                    color = when {
+                                                        isCurrent -> Color(0xFF00E5FF)
+                                                        isPassed -> Color.White
+                                                        else -> Color.White.copy(alpha = 0.4f)
+                                                    },
+                                                    fontSize = 10.sp,
+                                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
+                                                )
+                                            }
+                                            
+                                            if (index < editHistory.lastIndex) {
+                                                Text(
+                                                    "➔",
+                                                    color = Color.White.copy(alpha = 0.3f),
+                                                    fontSize = 10.sp
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+                                
+                                // Color Filters selection row
+                                Text(
+                                    "Yapay Zeka Renk Efektleri",
+                                    color = Color.White.copy(alpha = 0.6f),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.align(Alignment.Start)
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                
+                                val filters = listOf("Yok", "Vintage", "Cyber", "Sepia", "Monochrome")
+                                LazyRow(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    items(filters.size) { i ->
+                                        val fName = filters[i]
+                                        val isSelected = activeFilter == fName
+                                        
+                                        Box(
+                                            modifier = Modifier
+                                                .background(
+                                                    if (isSelected) Color(0xFFFFD700).copy(alpha = 0.2f) else Color.White.copy(alpha = 0.05f),
+                                                    RoundedCornerShape(10.dp)
+                                                )
+                                                .border(
+                                                    1.dp,
+                                                    if (isSelected) Color(0xFFFFD700) else Color.White.copy(alpha = 0.1f),
+                                                    RoundedCornerShape(10.dp)
+                                                )
+                                                .clickable {
+                                                    val truncated = editHistory.subList(0, historyIndex + 1)
+                                                    editHistory = truncated + "Filtre: $fName"
+                                                    historyIndex = truncated.size
+                                                }
+                                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                                        ) {
+                                            Text(
+                                                text = fName,
+                                                color = if (isSelected) Color(0xFFFFD700) else Color.White,
+                                                fontSize = 11.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                // High Quality HD and Smart AI Beautify Buttons Row
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    // HD Enhancement
+                                    Button(
+                                        onClick = {
+                                            val truncated = editHistory.subList(0, historyIndex + 1)
+                                            editHistory = truncated + (if (isHdActive) "HD Kaldır" else "HD Geliştirme")
+                                            historyIndex = truncated.size
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isHdActive) Color(0xFF00E5FF).copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f),
+                                            contentColor = if (isHdActive) Color(0xFF00E5FF) else Color.White
+                                        ),
+                                        border = BorderStroke(1.dp, if (isHdActive) Color(0xFF00E5FF) else Color.White.copy(alpha = 0.15f))
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.HighQuality,
+                                            contentDescription = "HD",
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("HD Geliştir", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    // AI Smart Beauty
+                                    Button(
+                                        onClick = {
+                                            val truncated = editHistory.subList(0, historyIndex + 1)
+                                            editHistory = truncated + (if (isAiBeautified) "Güzellik Kaldır" else "Yapay Zeka Güzelleştirme")
+                                            historyIndex = truncated.size
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isAiBeautified) Color(0xFFD500F9).copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f),
+                                            contentColor = if (isAiBeautified) Color(0xFFD500F9) else Color.White
+                                        ),
+                                        border = BorderStroke(1.dp, if (isAiBeautified) Color(0xFFD500F9) else Color.White.copy(alpha = 0.15f))
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.AutoAwesome,
+                                            contentDescription = "Beautify",
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("AI Güzelleştir", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
                                 Spacer(modifier = Modifier.height(24.dp))
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),

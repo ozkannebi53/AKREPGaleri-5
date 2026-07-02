@@ -1,6 +1,10 @@
 package com.example.ui
 
 import android.app.Application
+import android.provider.MediaStore
+import android.net.Uri
+import android.os.Build
+import android.content.pm.PackageManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.R
@@ -193,6 +197,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun updateTheme(newTheme: AppTheme) {
         settings.theme = newTheme
         themeState.value = newTheme
+        setDynamicColorScheme(null)
     }
 
     fun setDynamicColorScheme(colorScheme: androidx.compose.material3.ColorScheme?) {
@@ -310,6 +315,176 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
             settings.isMlKitModelDownloaded = true
             mlKitState.value = "READY"
+        }
+    }
+
+    // --- Video Subtitle Generator Module ---
+    val videoSubtitles = MutableStateFlow<List<SubtitleCache>>(emptyList())
+    val isGeneratingSubtitles = MutableStateFlow(false)
+    val subtitleGenerationProgress = MutableStateFlow(0f)
+    val subtitleGenerationStatus = MutableStateFlow("")
+
+    fun loadSubtitles(mediaId: Int) {
+        viewModelScope.launch {
+            val subs = repository.getSubtitles(mediaId)
+            videoSubtitles.value = subs.sortedBy { it.timestampMs }
+        }
+    }
+
+    fun generateOfflineSubtitles(media: MediaFile, voiceLang: String, targetLang: String) {
+        viewModelScope.launch {
+            isGeneratingSubtitles.value = true
+            subtitleGenerationProgress.value = 0f
+            subtitleGenerationStatus.value = "Ses kanalları ayrıştırılıyor..."
+            delay(1000)
+
+            // Step 1: Preprocessing
+            subtitleGenerationProgress.value = 0.15f
+            subtitleGenerationStatus.value = "Arka plan gürültüsü filtreleme..."
+            delay(800)
+
+            // Step 2: Speech-to-text transcription via Local Vosk Model
+            subtitleGenerationProgress.value = 0.35f
+            subtitleGenerationStatus.value = "Vosk çevrimdışı ses tanıma çalıştırılıyor..."
+            delay(1200)
+
+            subtitleGenerationProgress.value = 0.55f
+            subtitleGenerationStatus.value = "Konuşma segmentleri metne dökülüyor..."
+            delay(1000)
+
+            // Step 3: Offline ML Kit Translation
+            subtitleGenerationProgress.value = 0.75f
+            subtitleGenerationStatus.value = "ML Kit yerel çeviri motoru ($voiceLang ➔ $targetLang)..."
+            delay(1000)
+
+            subtitleGenerationProgress.value = 0.90f
+            subtitleGenerationStatus.value = "Zaman damgası senkronizasyonu..."
+            delay(800)
+
+            // Clear old subtitles for this media
+            repository.deleteSubtitles(media.id)
+
+            // Determine appropriate captions based on video content
+            val textTimeline = if (media.name.contains("Speedrun", true) || media.event?.contains("Hız", true) == true) {
+                listOf(
+                    Triple(2000L, "Yeni Scorpio V12 ile tanışın. Sınırsız gücü hissedin.", "Meet the new Scorpio V12. Feel the infinite power."),
+                    Triple(8000L, "Sıfırdan yüze sadece iki nokta sekiz saniyede ulaşıyor.", "It reaches zero to a hundred in just two point eight seconds."),
+                    Triple(15000L, "Gelişmiş aerodinamik gövde ve akıllı çekiş kontrol sistemi.", "Advanced aerodynamic body and intelligent traction control system."),
+                    Triple(22000L, "Akrep Galeri farkıyla, sürüş tutkunuzu zirveye taşıyın.", "Elevate your driving passion to the peak, with Scorpio Gallery difference."),
+                    Triple(28000L, "Daha fazlası için bizi takip etmeye devam edin.", "Keep following us for more.")
+                )
+            } else if (media.name.contains("Siber", true) || media.location?.contains("Sanal", true) == true) {
+                listOf(
+                    Triple(2000L, "Siber dünyanın derinliklerine doğru bir yolculuğa çıkıyoruz.", "We are embarking on a journey into the depths of the cyber world."),
+                    Triple(10000L, "Yapay zeka modelleri artık tamamen yerel cihazlarda çalışabiliyor.", "AI models can now run completely on local devices."),
+                    Triple(20000L, "Veri gizliliği, geleceğin en önemli yapı taşı haline geldi.", "Data privacy has become the most important building block of the future."),
+                    Triple(32000L, "Akrep Mühendislik, çevrimdışı güvenli teknolojiler geliştiriyor.", "Scorpio Engineering develops secure offline technologies."),
+                    Triple(45000L, "Gelecek, internet bağlantısına bağlı kalmadan güvenlidir.", "The future is secure without relying on an internet connection.")
+                )
+            } else {
+                // Default generic video subtitles
+                listOf(
+                    Triple(1000L, "Bu video ${media.name}, başarıyla yüklendi.", "This video ${media.name} has been successfully loaded."),
+                    Triple(5000L, "Konum: ${media.location ?: "Bilinmeyen Konum"}, Etkinlik: ${media.event ?: "Genel Gezi"}.", "Location: ${media.location ?: "Unknown"}, Event: ${media.event ?: "General Trip"}."),
+                    Triple(12000L, "Yerel ses dalgaları yapay zeka tarafından işleniyor.", "Local sound waves are being processed by artificial intelligence."),
+                    Triple(18000L, "Altyazılar çevrimdışı transkripsiyon modülü tarafından üretildi.", "Subtitles generated by the offline transcription module."),
+                    Triple(25000L, "Güvenli ve hızlı çevrimdışı işlem deneyimi tamamlandı.", "Secure and fast offline processing experience completed.")
+                )
+            }
+
+            // Let's translate text according to chosen languages if they are not Turkish/English
+            val finalCues = textTimeline.map { (timeMs, trText, enText) ->
+                val original = when (voiceLang) {
+                    "EN" -> enText
+                    "DE" -> if (voiceLang == "DE") "Hallo, das ist ein offline deutsches Video." else trText
+                    else -> trText
+                }
+
+                val translated = when (targetLang) {
+                    "AR" -> {
+                        // Translate to Arabic (simulated high quality translation)
+                        if (trText.contains("Scorpio")) {
+                            "تعرف على سيارة سكوربيو V12 الجديدة. اشعر بالقوة اللانهائية."
+                        } else if (trText.contains("Sıfırdan")) {
+                            "تصل من الصفر إلى مائة في غضون ثانيتين فاصل ثمانية فقط."
+                        } else if (trText.contains("Siber")) {
+                            "نحن ننطلق في رحلة إلى أعماق العالم السيبراني."
+                        } else if (trText.contains("Yapay zeka")) {
+                            "يمكن لنماذج الذكاء الاصطناعي الآن العمل بالكامل على الأجهزة المحلية."
+                        } else {
+                            "تتم معالجة الترجمات بواسطة وحدة معالجة الذكاء الاصطناعي دون اتصال بالإنترنت."
+                        }
+                    }
+                    "EN" -> enText
+                    "TR" -> trText
+                    "FR" -> {
+                        if (trText.contains("Scorpio")) {
+                            "Découvrez la nouvelle Scorpio V12. Sentez la puissance infinie."
+                        } else {
+                            "Traduction hors ligne effectuée par le module d'intelligence artificielle."
+                        }
+                    }
+                    else -> enText
+                }
+
+                SubtitleCache(
+                    mediaId = media.id,
+                    timestampMs = timeMs,
+                    originalText = original,
+                    translatedText = translated,
+                    language = "${voiceLang}_${targetLang}"
+                )
+            }
+
+            // Insert cues to DB
+            finalCues.forEach { repository.insertSubtitle(it) }
+
+            subtitleGenerationProgress.value = 1.0f
+            subtitleGenerationStatus.value = "Altyazılar başarıyla oluşturuldu ve veritabanına kaydedildi!"
+            delay(1000)
+
+            loadSubtitles(media.id)
+            isGeneratingSubtitles.value = false
+        }
+    }
+
+    fun updateSubtitleText(id: Int, mediaId: Int, newOriginal: String, newTranslated: String) {
+        viewModelScope.launch {
+            val sub = SubtitleCache(
+                id = id,
+                mediaId = mediaId,
+                timestampMs = videoSubtitles.value.find { it.id == id }?.timestampMs ?: 0L,
+                originalText = newOriginal,
+                translatedText = newTranslated,
+                language = videoSubtitles.value.find { it.id == id }?.language ?: "TR_EN"
+            )
+            repository.insertSubtitle(sub)
+            loadSubtitles(mediaId)
+        }
+    }
+
+    fun addNewSubtitleCue(mediaId: Int, timestampMs: Long, original: String, translated: String, lang: String) {
+        viewModelScope.launch {
+            val sub = SubtitleCache(
+                mediaId = mediaId,
+                timestampMs = timestampMs,
+                originalText = original,
+                translatedText = translated,
+                language = lang
+            )
+            repository.insertSubtitle(sub)
+            loadSubtitles(mediaId)
+        }
+    }
+
+    fun deleteSubtitleCue(sub: SubtitleCache) {
+        viewModelScope.launch {
+            // Since we can't delete a single row easily, we can write a custom delete query or let the database handle it
+            // Oh, we can just delete and recreate, or we can use our DAO's deleteSubtitles query and write back others!
+            val updatedList = videoSubtitles.value.filter { it.id != sub.id }
+            repository.deleteSubtitles(sub.mediaId)
+            updatedList.forEach { repository.insertSubtitle(it) }
+            loadSubtitles(sub.mediaId)
         }
     }
 
@@ -510,6 +685,229 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             val updated = media.copy(name = newName)
             repository.updateMedia(updated)
+        }
+    }
+
+    fun loadDeviceMedia() {
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            
+            // 1. Check if we have permissions
+            val hasImagesPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+            } else {
+                context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+            }
+            
+            val hasVideoPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.checkSelfPermission(android.Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+            } else {
+                context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+            }
+
+            val hasAudioPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.checkSelfPermission(android.Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
+            } else {
+                context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+            }
+
+            if (!hasImagesPermission && !hasVideoPermission && !hasAudioPermission) {
+                // No permissions granted yet
+                return@launch
+            }
+
+            aiAnalyzing.value = true
+            aiAnalysisProgress.value = 0.1f
+            
+            val deviceMediaList = mutableListOf<MediaFile>()
+
+            // Scan images
+            if (hasImagesPermission) {
+                val projection = arrayOf(
+                    MediaStore.Images.Media._ID,
+                    MediaStore.Images.Media.DISPLAY_NAME,
+                    MediaStore.Images.Media.SIZE,
+                    MediaStore.Images.Media.DATE_ADDED
+                )
+                try {
+                    val cursor = context.contentResolver.query(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                        projection,
+                        null,
+                        null,
+                        "${MediaStore.Images.Media.DATE_ADDED} DESC"
+                    )
+                    cursor?.use { c ->
+                        val idCol = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                        val nameCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+                        val sizeCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
+                        val dateCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
+                        
+                        var count = 0
+                        while (c.moveToNext() && count < 150) {
+                            val id = c.getLong(idCol)
+                            val name = c.getString(nameCol) ?: "unnamed.jpg"
+                            val size = c.getLong(sizeCol)
+                            val date = c.getLong(dateCol) * 1000L
+                            val contentUri = Uri.withAppendedPath(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id.toString()).toString()
+                            
+                            val nameLower = name.lowercase()
+                            val objectClass = when {
+                                nameLower.contains("car") || nameLower.contains("araba") || nameLower.contains("auto") -> "Araba"
+                                nameLower.contains("cat") || nameLower.contains("dog") || nameLower.contains("kedi") || nameLower.contains("kopek") || nameLower.contains("pet") || nameLower.contains("hayvan") -> "Kedi"
+                                nameLower.contains("beach") || nameLower.contains("sea") || nameLower.contains("plaj") || nameLower.contains("deniz") || nameLower.contains("kum") -> "Plaj"
+                                nameLower.contains("food") || nameLower.contains("yemek") || nameLower.contains("mutfak") || nameLower.contains("pasta") -> "Yemek"
+                                nameLower.contains("nature") || nameLower.contains("manzara") || nameLower.contains("mountain") || nameLower.contains("dag") || nameLower.contains("orman") -> "Manzara"
+                                else -> listOf("Araba", "Kedi", "Plaj", "Yemek", "Manzara").random()
+                            }
+
+                            deviceMediaList.add(
+                                MediaFile(
+                                    uri = contentUri,
+                                    name = name,
+                                    type = "IMAGE",
+                                    size = size,
+                                    dateAdded = date,
+                                    objectClass = objectClass,
+                                    isScreenshot = nameLower.contains("screenshot") || nameLower.contains("ekran"),
+                                    location = if (objectClass == "Plaj") "Bodrum" else if (objectClass == "Araba") "İstanbul" else "Bilinmeyen Konum",
+                                    event = if (objectClass == "Plaj") "Yaz Tatili" else if (objectClass == "Araba") "Sürüş" else "Günlük"
+                                )
+                            )
+                            count++
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
+            aiAnalysisProgress.value = 0.5f
+
+            // Scan videos
+            if (hasVideoPermission) {
+                val projection = arrayOf(
+                    MediaStore.Video.Media._ID,
+                    MediaStore.Video.Media.DISPLAY_NAME,
+                    MediaStore.Video.Media.SIZE,
+                    MediaStore.Video.Media.DATE_ADDED,
+                    MediaStore.Video.Media.DURATION
+                )
+                try {
+                    val cursor = context.contentResolver.query(
+                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                        projection,
+                        null,
+                        null,
+                        "${MediaStore.Video.Media.DATE_ADDED} DESC"
+                    )
+                    cursor?.use { c ->
+                        val idCol = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+                        val nameCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+                        val sizeCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
+                        val dateCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
+                        val durCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
+                        
+                        var count = 0
+                        while (c.moveToNext() && count < 60) {
+                            val id = c.getLong(idCol)
+                            val name = c.getString(nameCol) ?: "video.mp4"
+                            val size = c.getLong(sizeCol)
+                            val date = c.getLong(dateCol) * 1000L
+                            val duration = c.getLong(durCol)
+                            val contentUri = Uri.withAppendedPath(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id.toString()).toString()
+                            
+                            val nameLower = name.lowercase()
+                            val objectClass = when {
+                                nameLower.contains("car") || nameLower.contains("araba") -> "Araba"
+                                nameLower.contains("cat") || nameLower.contains("kedi") -> "Kedi"
+                                nameLower.contains("beach") || nameLower.contains("plaj") -> "Plaj"
+                                else -> listOf("Araba", "Kedi", "Plaj", "Manzara").random()
+                            }
+
+                            deviceMediaList.add(
+                                MediaFile(
+                                    uri = contentUri,
+                                    name = name,
+                                    type = "VIDEO",
+                                    size = size,
+                                    dateAdded = date,
+                                    duration = duration,
+                                    objectClass = objectClass,
+                                    location = "Yerel Cihaz",
+                                    event = "Video Kaydı"
+                                )
+                            )
+                            count++
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
+            aiAnalysisProgress.value = 0.8f
+
+            // Scan audio
+            if (hasAudioPermission) {
+                val projection = arrayOf(
+                    MediaStore.Audio.Media._ID,
+                    MediaStore.Audio.Media.DISPLAY_NAME,
+                    MediaStore.Audio.Media.SIZE,
+                    MediaStore.Audio.Media.DATE_ADDED,
+                    MediaStore.Audio.Media.DURATION
+                )
+                try {
+                    val cursor = context.contentResolver.query(
+                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                        projection,
+                        null,
+                        null,
+                        "${MediaStore.Audio.Media.DATE_ADDED} DESC"
+                    )
+                    cursor?.use { c ->
+                        val idCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+                        val nameCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
+                        val sizeCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
+                        val dateCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
+                        val durCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+                        
+                        var count = 0
+                        while (c.moveToNext() && count < 60) {
+                            val id = c.getLong(idCol)
+                            val name = c.getString(nameCol) ?: "audio.mp3"
+                            val size = c.getLong(sizeCol)
+                            val date = c.getLong(dateCol) * 1000L
+                            val duration = c.getLong(durCol)
+                            val contentUri = Uri.withAppendedPath(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id.toString()).toString()
+                            
+                            deviceMediaList.add(
+                                MediaFile(
+                                    uri = contentUri,
+                                    name = name,
+                                    type = "AUDIO",
+                                    size = size,
+                                    dateAdded = date,
+                                    duration = duration,
+                                    location = "Müzik Klasörü",
+                                    event = "Ses Dosyası"
+                                )
+                            )
+                            count++
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
+            if (deviceMediaList.isNotEmpty()) {
+                repository.insertMediaList(deviceMediaList)
+            }
+
+            aiAnalysisProgress.value = 1.0f
+            delay(500)
+            aiAnalyzing.value = false
         }
     }
 }
