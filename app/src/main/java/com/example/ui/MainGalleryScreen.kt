@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -89,7 +90,8 @@ fun MainGalleryScreen(
     
     // Selection state for multi-select
     val selectedMediaList by viewModel.selectedMediaList.collectAsState()
-    val isMultiSelectMode = selectedMediaList.isNotEmpty()
+    val selectionHistory by viewModel.selectionHistory.collectAsState()
+    val isMultiSelectMode = selectedMediaList.isNotEmpty() || selectionHistory.isNotEmpty()
     
     // Local Face Detection States
     val isFaceScanning by viewModel.isFaceScanning.collectAsState()
@@ -135,18 +137,31 @@ fun MainGalleryScreen(
     var selectedFaceGroupId by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
 
-    // Back Button Handler (Intercepts back clicks to prevent exiting the app when views are active)
+    // Back Button Handler (Intercepts back clicks to prevent exiting the app, supporting hierarchical navigation)
     val activeDetailImageForBack by viewModel.selectedMedia.collectAsState()
-    BackHandler(enabled = activeDetailImageForBack != null || isMultiSelectMode || activeAlbumSubView != null) {
+    val isBackNavigationEnabled = activeDetailImageForBack != null || 
+            isMultiSelectMode || 
+            activeAlbumSubView != null || 
+            selectedFaceGroupId != null || 
+            currentTab != "FOTOĞRAFLAR"
+
+    BackHandler(enabled = isBackNavigationEnabled) {
         when {
             activeDetailImageForBack != null -> {
                 viewModel.selectedMedia.value = null
             }
             isMultiSelectMode -> {
-                viewModel.clearSelection()
+                viewModel.exitMultiSelectMode()
             }
             activeAlbumSubView != null -> {
                 activeAlbumSubView = null
+            }
+            selectedFaceGroupId != null -> {
+                selectedFaceGroupId = null
+            }
+            currentTab != "FOTOĞRAFLAR" -> {
+                // Returns user back to primary FOTOĞRAFLAR home tab
+                currentTab = "FOTOĞRAFLAR"
             }
         }
     }
@@ -817,7 +832,7 @@ fun MainGalleryScreen(
                                         val imgTranslationX = 0f
                                         val imgTranslationY = 0f
 
-                                        Box(
+                                        Card(
                                             modifier = Modifier
                                                 .aspectRatio(1f)
                                                 .onGloballyPositioned { coords ->
@@ -830,8 +845,6 @@ fun MainGalleryScreen(
                                                     translationY = cardTranslationY
                                                     cameraDistance = 16f * density
                                                 }
-                                                .clip(RoundedCornerShape(16.dp))
-                                                .background(MaterialTheme.colorScheme.surfaceVariant)
                                                 .combinedClickable(
                                                     onLongClick = { viewModel.toggleSelection(image) },
                                                     onClick = {
@@ -841,30 +854,42 @@ fun MainGalleryScreen(
                                                             updateDynamicTheme(image)
                                                         }
                                                     }
-                                                )
+                                                ),
+                                            shape = RoundedCornerShape(12.dp),
+                                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                                         ) {
-                                            AsyncImage(
-                                                model = if (image.resourceId != 0) image.resourceId else image.uri,
-                                                contentDescription = image.name,
-                                                modifier = Modifier
-                                                    .fillMaxSize()
-                                                    .graphicsLayer {
-                                                        scaleX = 1.15f
-                                                        scaleY = 1.15f
-                                                        translationX = imgTranslationX
-                                                        translationY = imgTranslationY
-                                                    },
-                                                contentScale = ContentScale.Crop
-                                            )
-                                            
-                                            if (isMultiSelectMode) {
-                                                Checkbox(
-                                                    checked = selectedMediaList.contains(image),
-                                                    onCheckedChange = { viewModel.toggleSelection(image) },
-                                                    modifier = Modifier.align(Alignment.TopEnd)
+                                            Box(modifier = Modifier.fillMaxSize()) {
+                                                AsyncImage(
+                                                    model = if (image.resourceId != 0) image.resourceId else image.uri,
+                                                    contentDescription = image.name,
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .graphicsLayer {
+                                                            scaleX = 1.15f
+                                                            scaleY = 1.15f
+                                                            translationX = imgTranslationX
+                                                            translationY = imgTranslationY
+                                                        },
+                                                    contentScale = ContentScale.Crop
                                                 )
-                                            }
-
+                                                
+                                                if (isMultiSelectMode) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxSize()
+                                                            .background(if (selectedMediaList.contains(image)) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f) else Color.Transparent),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        if (selectedMediaList.contains(image)) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.CheckCircle,
+                                                                contentDescription = "Seçili",
+                                                                tint = MaterialTheme.colorScheme.primary,
+                                                                modifier = Modifier.size(32.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                }
                                             // Highlight tag overlay
                                             Box(
                                                 modifier = Modifier
@@ -880,25 +905,16 @@ fun MainGalleryScreen(
                                                         shape = RoundedCornerShape(8.dp)
                                                     )
                                                     .border(
-                                                        width = 1.dp,
-                                                        brush = Brush.linearGradient(
-                                                            colors = listOf(
-                                                                Color(0xFF00E5FF).copy(alpha = 0.45f),
-                                                                Color.White.copy(alpha = 0.15f)
-                                                            )
-                                                        ),
+                                                        width = 0.5.dp,
+                                                        color = Color.White.copy(alpha = 0.1f),
                                                         shape = RoundedCornerShape(8.dp)
                                                     )
                                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                                             ) {
                                                 Text(
-                                                    text = when {
-                                                        image.isScreenshot -> "Ekran"
-                                                        image.objectClass != null -> image.objectClass
-                                                        else -> "AI"
-                                                    } ?: "Bilinmeyen",
-                                                    color = Color.White,
+                                                    text = image.objectClass ?: "Resim",
                                                     fontSize = 9.sp,
+                                                    color = Color.White,
                                                     fontWeight = FontWeight.Bold
                                                 )
                                             }
@@ -997,8 +1013,6 @@ fun MainGalleryScreen(
                                 }
                             }
                         }
-                    }
-
                     "VİDEOLAR" -> {
                         Column(modifier = Modifier.fillMaxSize()) {
                             Row(
@@ -1119,7 +1133,6 @@ fun MainGalleryScreen(
                             }
                         }
                     }
-                    }
 
                     "MÜZİKLER" -> {
                         Column(modifier = Modifier.fillMaxSize()) {
@@ -1207,7 +1220,6 @@ fun MainGalleryScreen(
                                 }
                             }
                         }
-                    }
                     }
 
                     "ALBÜMLER" -> {
@@ -1739,43 +1751,101 @@ fun MainGalleryScreen(
                 }
             }
 
-            // 8. CYBERNETIC FLOATING MULTI-SELECTION ACTION PANEL
+            // 8. CYBERNETIC FIXED BOTTOM MULTI-SELECTION ACTION BAR
             Box(modifier = Modifier.fillMaxSize()) {
                 androidx.compose.animation.AnimatedVisibility(
-                visible = isMultiSelectMode,
-                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 16.dp)
-            ) {
-                Card(
-                        modifier = Modifier
-                            .fillMaxWidth(0.92f)
-                            .height(72.dp)
-                            .shadow(16.dp, RoundedCornerShape(36.dp)),
-                        shape = RoundedCornerShape(36.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFF0F111A).copy(alpha = 0.92f)
-                        ),
-                        border = BorderStroke(
-                            width = 1.2.dp,
-                            brush = Brush.horizontalGradient(
-                                listOf(Color(0xFF00FF66).copy(alpha = 0.4f), Color(0xFF00E5FF).copy(alpha = 0.4f))
-                            )
+                    visible = isMultiSelectMode,
+                    enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                    exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                ) {
+                    val shareMedia = {
+                        try {
+                            val uris = selectedMediaList.mapNotNull { media ->
+                                if (media.uri.startsWith("content://")) {
+                                    android.net.Uri.parse(media.uri)
+                                } else {
+                                    null
+                                }
+                            }
+                            val intent = android.content.Intent().apply {
+                                if (uris.isNotEmpty()) {
+                                    if (uris.size == 1) {
+                                        action = android.content.Intent.ACTION_SEND
+                                        putExtra(android.content.Intent.EXTRA_STREAM, uris.first())
+                                    } else {
+                                        action = android.content.Intent.ACTION_SEND_MULTIPLE
+                                        putParcelableArrayListExtra(android.content.Intent.EXTRA_STREAM, ArrayList(uris))
+                                    }
+                                    type = if (selectedMediaList.all { it.type == "IMAGE" }) "image/*" else if (selectedMediaList.all { it.type == "VIDEO" }) "video/*" else "*/*"
+                                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                } else {
+                                    action = android.content.Intent.ACTION_SEND
+                                    type = "text/plain"
+                                    val fileNames = selectedMediaList.joinToString("\n") { "- ${it.name} (${it.type})" }
+                                    putExtra(android.content.Intent.EXTRA_TEXT, "Akrep Galeri'den paylaşılan dosyalar:\n$fileNames")
+                                }
+                            }
+                            context.startActivity(android.content.Intent.createChooser(intent, "Medyayı Paylaş"))
+                            viewModel.exitMultiSelectMode()
+                            viewModel.unlockStatusMessage.value = "Dosyalar paylaşıldı!"
+                        } catch (e: Exception) {
+                            viewModel.unlockStatusMessage.value = "Paylaşım başlatılamadı: ${e.message}"
+                        }
+                    }
+
+                    var showAlbumMenu by remember { mutableStateOf(false) }
+                    var showDeleteDialog by remember { mutableStateOf(false) }
+
+                    if (showDeleteDialog) {
+                        AlertDialog(
+                            onDismissRequest = { showDeleteDialog = false },
+                            title = { androidx.compose.material3.Text("Silme Onayı") },
+                            text = { androidx.compose.material3.Text("Seçili ${selectedMediaList.size} dosyayı kalıcı olarak silmek istiyor musunuz?") },
+                            confirmButton = {
+                                androidx.compose.material3.TextButton(onClick = {
+                                    selectedMediaList.forEach { item ->
+                                        viewModel.deleteMedia(item.id)
+                                    }
+                                    viewModel.exitMultiSelectMode()
+                                    viewModel.unlockStatusMessage.value = "Seçilen dosyalar kalıcı olarak silindi!"
+                                    showDeleteDialog = false
+                                }) {
+                                    androidx.compose.material3.Text("Sil")
+                                }
+                            },
+                            dismissButton = {
+                                androidx.compose.material3.TextButton(onClick = { showDeleteDialog = false }) {
+                                    androidx.compose.material3.Text("İptal")
+                                }
+                            }
                         )
+                    }
+
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding(),
+                        color = Color(0xFF0F111A).copy(alpha = 0.96f),
+                        border = BorderStroke(
+                            width = 1.dp,
+                            brush = Brush.verticalGradient(
+                                listOf(Color(0xFF00FF66).copy(alpha = 0.3f), Color(0xFF00E5FF).copy(alpha = 0.3f))
+                            )
+                        ),
+                        shadowElevation = 16.dp
                     ) {
                         Row(
                             modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 24.dp),
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             // Left: Selected count and cancel
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 IconButton(
-                                    onClick = { viewModel.clearSelection() },
+                                    onClick = { viewModel.exitMultiSelectMode() },
                                     modifier = Modifier
                                         .size(36.dp)
                                         .background(Color.White.copy(alpha = 0.08f), CircleShape)
@@ -1784,6 +1854,20 @@ fun MainGalleryScreen(
                                         imageVector = Icons.Default.Close,
                                         contentDescription = "Seçimi Temizle",
                                         tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                IconButton(
+                                    onClick = shareMedia,
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .background(Color.White.copy(alpha = 0.08f), CircleShape)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Share,
+                                        contentDescription = "Paylaş",
+                                        tint = Color(0xFF00E5FF),
                                         modifier = Modifier.size(16.dp)
                                     )
                                 }
@@ -1810,38 +1894,95 @@ fun MainGalleryScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                // 1. Vault / Lock action
+                                // 0. Undo Selection action
+                                val canUndo = selectionHistory.isNotEmpty()
                                 IconButton(
                                     onClick = {
-                                        // Lock selected items
-                                        selectedMediaList.forEach { item ->
-                                            viewModel.toggleVaultStatus(item.id, true)
-                                        }
-                                        viewModel.clearSelection()
-                                        viewModel.unlockStatusMessage.value = "Seçilen dosyalar Akrep Kalkanı kasasına kilitlendi!"
+                                        viewModel.undoSelection()
                                     },
+                                    enabled = canUndo,
                                     modifier = Modifier
                                         .size(44.dp)
-                                        .background(Color(0xFFFF3D00).copy(alpha = 0.15f), CircleShape)
-                                        .border(1.dp, Color(0xFFFF3D00).copy(alpha = 0.4f), CircleShape)
+                                        .background(if (canUndo) Color(0xFF00E5FF).copy(alpha = 0.15f) else Color.White.copy(alpha = 0.03f), CircleShape)
+                                        .border(1.dp, if (canUndo) Color(0xFF00E5FF).copy(alpha = 0.4f) else Color.White.copy(alpha = 0.1f), CircleShape)
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.Lock,
-                                        contentDescription = "Kasaya Kilitle",
-                                        tint = Color(0xFFFF6E40),
+                                        imageVector = Icons.AutoMirrored.Filled.Undo,
+                                        contentDescription = "Seçimi Geri Al",
+                                        tint = if (canUndo) Color(0xFF00E5FF) else Color.Gray,
                                         modifier = Modifier.size(18.dp)
                                     )
+                                }
+
+                                // 1. Move to Album action (Albüme Taşıma)
+                                Box {
+                                    IconButton(
+                                        onClick = { showAlbumMenu = true },
+                                        modifier = Modifier
+                                            .size(44.dp)
+                                            .background(Color(0xFFE040FB).copy(alpha = 0.15f), CircleShape)
+                                            .border(1.dp, Color(0xFFE040FB).copy(alpha = 0.4f), CircleShape)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Folder,
+                                            contentDescription = "Albüme Taşı",
+                                            tint = Color(0xFFE040FB),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+
+                                    DropdownMenu(
+                                        expanded = showAlbumMenu,
+                                        onDismissRequest = { showAlbumMenu = false },
+                                        modifier = Modifier.background(Color(0xFF141722))
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text("Akrep Spor Otomobiller", color = Color.White) },
+                                            onClick = {
+                                                viewModel.moveSelectedMediaToAlbum("araba")
+                                                showAlbumMenu = false
+                                                viewModel.unlockStatusMessage.value = "Dosyalar Spor Otomobiller albümüne taşındı!"
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Yeryüzü Manzaraları", color = Color.White) },
+                                            onClick = {
+                                                viewModel.moveSelectedMediaToAlbum("manzara")
+                                                showAlbumMenu = false
+                                                viewModel.unlockStatusMessage.value = "Dosyalar Manzaralar albümüne taşındı!"
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Gurme Tatlar", color = Color.White) },
+                                            onClick = {
+                                                viewModel.moveSelectedMediaToAlbum("yemek")
+                                                showAlbumMenu = false
+                                                viewModel.unlockStatusMessage.value = "Dosyalar Gurme Tatlar albümüne taşındı!"
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Ekran Görüntüleri", color = Color.White) },
+                                            onClick = {
+                                                viewModel.moveSelectedMediaToAlbum("screenshots")
+                                                showAlbumMenu = false
+                                                viewModel.unlockStatusMessage.value = "Dosyalar Ekran Görüntüleri albümüne taşındı!"
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Gizli Akrep Kalkanı", color = Color.White) },
+                                            onClick = {
+                                                viewModel.moveSelectedMediaToAlbum("kasa")
+                                                showAlbumMenu = false
+                                                viewModel.unlockStatusMessage.value = "Dosyalar Akrep Kalkanı kasasına kilitlendi!"
+                                            }
+                                        )
+                                    }
                                 }
 
                                 // 2. Delete action
                                 IconButton(
                                     onClick = {
-                                        // Delete selected items
-                                        selectedMediaList.forEach { item ->
-                                            viewModel.deleteMedia(item.id)
-                                        }
-                                        viewModel.clearSelection()
-                                        viewModel.unlockStatusMessage.value = "Seçilen dosyalar kalıcı olarak silindi!"
+                                        showDeleteDialog = true
                                     },
                                     modifier = Modifier
                                         .size(44.dp)
@@ -1856,12 +1997,9 @@ fun MainGalleryScreen(
                                     )
                                 }
 
-                                // 3. Share Simulation Action
+                                // 3. Share Action
                                 IconButton(
-                                    onClick = {
-                                        viewModel.clearSelection()
-                                        viewModel.unlockStatusMessage.value = "Dosyalar paylaşıma hazırlandı (Simüle Edildi)!"
-                                    },
+                                    onClick = shareMedia,
                                     modifier = Modifier
                                         .size(44.dp)
                                         .background(Color(0xFF00E5FF).copy(alpha = 0.15f), CircleShape)
@@ -3044,7 +3182,6 @@ fun MainGalleryScreen(
             }
         }
     }
-}
 }
 
 

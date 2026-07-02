@@ -12,6 +12,18 @@ import com.example.data.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import android.content.ContentValues
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.media.MediaScannerConnection
+import android.os.Environment
+import kotlinx.coroutines.Dispatchers
+import java.net.HttpURLConnection
+import java.net.URL
 
 class GalleryViewModel(application: Application) : AndroidViewModel(application) {
     private val db = MediaDatabase.getDatabase(application)
@@ -50,6 +62,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // Active Categories / Selected Files
     val selectedMedia = MutableStateFlow<MediaFile?>(null)
     val selectedMediaList = MutableStateFlow<Set<MediaFile>>(emptySet())
+    val selectionHistory = MutableStateFlow<List<Set<MediaFile>>>(emptyList())
     val aiAnalyzing = MutableStateFlow(false)
     val aiAnalysisProgress = MutableStateFlow(0f)
 
@@ -61,6 +74,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // Video Playback Gesture Values
     val videoBrightness = MutableStateFlow(0.7f) // Initial video brightness
     val videoVolume = MutableStateFlow(0.5f)     // Initial video volume
+
+    // Real Downloader States
+    val isDownloading = MutableStateFlow(false)
+    val downloadProgress = MutableStateFlow(0f)
+    val downloadingStatus = MutableStateFlow("")
 
     init {
         // Populate initial database records if empty
@@ -648,6 +666,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun toggleSelection(media: MediaFile) {
+        val history = selectionHistory.value.toMutableList()
+        history.add(selectedMediaList.value)
+        selectionHistory.value = history
+
         val current = selectedMediaList.value.toMutableSet()
         if (current.contains(media)) {
             current.remove(media)
@@ -658,18 +680,60 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun clearSelection() {
+        if (selectedMediaList.value.isNotEmpty()) {
+            val history = selectionHistory.value.toMutableList()
+            history.add(selectedMediaList.value)
+            selectionHistory.value = history
+        }
         selectedMediaList.value = emptySet()
+    }
+
+    fun exitMultiSelectMode() {
+        selectedMediaList.value = emptySet()
+        selectionHistory.value = emptyList()
+    }
+
+    fun undoSelection() {
+        val history = selectionHistory.value.toMutableList()
+        if (history.isNotEmpty()) {
+            val lastState = history.removeAt(history.lastIndex)
+            selectedMediaList.value = lastState
+            selectionHistory.value = history
+        }
     }
 
     fun deleteSelectedMedia() {
         viewModelScope.launch {
-            selectedMediaList.value.forEach { repository.deleteMedia(it.id) }
-            clearSelection()
+            selectedMediaList.value.forEach { media ->
+                if (media.uri.startsWith("content://")) {
+                    try {
+                        val uri = Uri.parse(media.uri)
+                        getApplication<Application>().contentResolver.delete(uri, null, null)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                repository.deleteMedia(media.id)
+            }
+            selectedMediaList.value = emptySet()
+            selectionHistory.value = emptyList()
         }
     }
 
     fun deleteMedia(id: Int) {
         viewModelScope.launch {
+            // Find the item first to get its URI from loaded list or db
+            val media = publicMedia.value.find { it.id == id } ?: vaultMedia.value.find { it.id == id }
+            media?.let { m ->
+                if (m.uri.startsWith("content://")) {
+                    try {
+                        val uri = Uri.parse(m.uri)
+                        getApplication<Application>().contentResolver.delete(uri, null, null)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
             repository.deleteMedia(id)
         }
     }
@@ -677,14 +741,282 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun moveSelectedMediaToVault() {
         viewModelScope.launch {
             selectedMediaList.value.forEach { repository.updateVaultStatus(it.id, true) }
-            clearSelection()
+            selectedMediaList.value = emptySet()
+            selectionHistory.value = emptyList()
+        }
+    }
+
+    fun moveSelectedMediaToAlbum(albumId: String) {
+        viewModelScope.launch {
+            selectedMediaList.value.forEach { media ->
+                val updatedMedia = when (albumId) {
+                    "araba" -> media.copy(objectClass = "Araba", isScreenshot = false, isInVault = false)
+                    "manzara" -> media.copy(objectClass = "Manzara", isScreenshot = false, isInVault = false)
+                    "yemek" -> media.copy(objectClass = "Yemek", isScreenshot = false, isInVault = false)
+                    "screenshots" -> media.copy(isScreenshot = true, objectClass = null, isInVault = false)
+                    "kasa" -> media.copy(isInVault = true, isScreenshot = false, objectClass = null)
+                    else -> media
+                }
+                if (albumId == "kasa") {
+                    repository.updateVaultStatus(media.id, true)
+                } else {
+                    repository.updateMedia(updatedMedia)
+                }
+            }
+            exitMultiSelectMode()
         }
     }
 
     fun renameMedia(media: MediaFile, newName: String) {
         viewModelScope.launch {
-            val updated = media.copy(name = newName)
+            val sanitizedName = if (newName.lowercase().endsWith(".jpg") || newName.lowercase().endsWith(".jpeg") || newName.lowercase().endsWith(".mp3") || newName.lowercase().endsWith(".mp4")) {
+                newName
+            } else {
+                newName + when (media.type) {
+                    "IMAGE" -> ".jpg"
+                    "VIDEO" -> ".mp4"
+                    "AUDIO" -> ".mp3"
+                    else -> ""
+                }
+            }
+
+            if (media.uri.startsWith("content://")) {
+                try {
+                    val resolver = getApplication<Application>().contentResolver
+                    val uri = Uri.parse(media.uri)
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, sanitizedName)
+                    }
+                    resolver.update(uri, values, null, null)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            val updated = media.copy(name = sanitizedName)
             repository.updateMedia(updated)
+        }
+    }
+
+    fun editAndSavePhoto(media: MediaFile, newName: String, filterName: String, isHd: Boolean, isBeautify: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val context = getApplication<Application>()
+                val resolver = context.contentResolver
+                
+                val originalBitmap: Bitmap? = if (media.uri.startsWith("content://")) {
+                    val uri = Uri.parse(media.uri)
+                    val inputStream = resolver.openInputStream(uri)
+                    BitmapFactory.decodeStream(inputStream).also { inputStream?.close() }
+                } else if (media.resourceId != 0) {
+                    BitmapFactory.decodeResource(context.resources, media.resourceId)
+                } else {
+                    null
+                }
+                
+                if (originalBitmap == null) return@launch
+                
+                val mutableBitmap = originalBitmap.copy(Bitmap.Config.ARGB_8888, true)
+                val canvas = Canvas(mutableBitmap)
+                val paint = Paint()
+                val colorMatrix = ColorMatrix()
+                
+                when (filterName) {
+                    "Sepia" -> {
+                        colorMatrix.set(floatArrayOf(
+                            0.393f, 0.769f, 0.189f, 0f, 0f,
+                            0.349f, 0.686f, 0.168f, 0f, 0f,
+                            0.272f, 0.534f, 0.131f, 0f, 0f,
+                            0f, 0f, 0f, 1f, 0f
+                        ))
+                        paint.colorFilter = ColorMatrixColorFilter(colorMatrix)
+                        canvas.drawBitmap(mutableBitmap, 0f, 0f, paint)
+                    }
+                    "Monochrome" -> {
+                        colorMatrix.setSaturation(0f)
+                        paint.colorFilter = ColorMatrixColorFilter(colorMatrix)
+                        canvas.drawBitmap(mutableBitmap, 0f, 0f, paint)
+                    }
+                    "Vintage" -> {
+                        colorMatrix.set(floatArrayOf(
+                            0.9f, 0f, 0f, 0f, 0f,
+                            0f, 0.8f, 0f, 0f, 0f,
+                            0f, 0f, 0.6f, 0f, 0f,
+                            0f, 0f, 0f, 1f, 0f
+                        ))
+                        paint.colorFilter = ColorMatrixColorFilter(colorMatrix)
+                        canvas.drawBitmap(mutableBitmap, 0f, 0f, paint)
+                    }
+                    "Cyber" -> {
+                        colorMatrix.set(floatArrayOf(
+                            1.2f, 0f, 0f, 0f, 50f,
+                            0f, 0.8f, 0f, 0f, 0f,
+                            0f, 0f, 1.5f, 0f, 50f,
+                            0f, 0f, 0f, 1f, 0f
+                        ))
+                        paint.colorFilter = ColorMatrixColorFilter(colorMatrix)
+                        canvas.drawBitmap(mutableBitmap, 0f, 0f, paint)
+                    }
+                }
+                
+                if (isHd) {
+                    val contrastMatrix = ColorMatrix().apply {
+                        val scale = 1.3f
+                        val translate = (-.5f * scale + .5f) * 255f
+                        set(floatArrayOf(
+                            scale, 0f, 0f, 0f, translate,
+                            0f, scale, 0f, 0f, translate,
+                            0f, 0f, scale, 0f, translate,
+                            0f, 0f, 0f, 1f, 0f
+                        ))
+                    }
+                    paint.colorFilter = ColorMatrixColorFilter(contrastMatrix)
+                    canvas.drawBitmap(mutableBitmap, 0f, 0f, paint)
+                }
+                
+                if (isBeautify) {
+                    val brightnessMatrix = ColorMatrix().apply {
+                        set(floatArrayOf(
+                            1.1f, 0f, 0f, 0f, 15f,
+                            0f, 1.1f, 0f, 0f, 15f,
+                            0f, 0f, 1.1f, 0f, 15f,
+                            0f, 0f, 0f, 1f, 0f
+                        ))
+                    }
+                    paint.colorFilter = ColorMatrixColorFilter(brightnessMatrix)
+                    canvas.drawBitmap(mutableBitmap, 0f, 0f, paint)
+                }
+                
+                val finalName = if (newName.lowercase().endsWith(".jpg") || newName.lowercase().endsWith(".jpeg")) newName else "$newName.jpg"
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, finalName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/AkrepGallery")
+                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+                    }
+                }
+                
+                val outUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+                if (outUri != null) {
+                    resolver.openOutputStream(outUri)?.use { outStream ->
+                        mutableBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outStream)
+                        outStream.flush()
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        contentValues.clear()
+                        contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                        resolver.update(outUri, contentValues, null, null)
+                    }
+                    
+                    MediaScannerConnection.scanFile(context, arrayOf(outUri.toString()), null) { _, _ ->
+                        viewModelScope.launch {
+                            loadDeviceMedia()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun downloadAndRegisterMedia(urlStr: String, fileType: String, suggestedName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                isDownloading.value = true
+                downloadProgress.value = 0f
+                downloadingStatus.value = "Sunucuya bağlanılıyor..."
+                
+                val url = URL(urlStr)
+                val connection = url.openConnection() as HttpURLConnection
+                connection.connect()
+                
+                if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                    downloadingStatus.value = "Hata: Sunucu kodu ${connection.responseCode}"
+                    delay(3000)
+                    isDownloading.value = false
+                    return@launch
+                }
+                
+                val fileLength = connection.contentLength
+                val inputStream = connection.inputStream
+                val context = getApplication<Application>()
+                val resolver = context.contentResolver
+                
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, suggestedName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, when (fileType) {
+                        "IMAGE" -> "image/jpeg"
+                        "VIDEO" -> "video/mp4"
+                        "AUDIO" -> "audio/mpeg"
+                        else -> "*/*"
+                    })
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val relativePath = when (fileType) {
+                            "IMAGE" -> Environment.DIRECTORY_PICTURES + "/AkrepGallery"
+                            "VIDEO" -> Environment.DIRECTORY_MOVIES + "/AkrepGallery"
+                            "AUDIO" -> Environment.DIRECTORY_MUSIC + "/AkrepGallery"
+                            else -> Environment.DIRECTORY_DOWNLOADS + "/AkrepGallery"
+                        }
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+                    }
+                }
+                
+                val collectionUri = when (fileType) {
+                    "IMAGE" -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                    "VIDEO" -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                    "AUDIO" -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+                    else -> MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                }
+                
+                val uri = resolver.insert(collectionUri, contentValues)
+                if (uri == null) {
+                    downloadingStatus.value = "Dosya oluşturulamadı!"
+                    delay(3000)
+                    isDownloading.value = false
+                    return@launch
+                }
+                
+                resolver.openOutputStream(uri)?.use { outputStream ->
+                    val data = ByteArray(4096)
+                    var total: Long = 0
+                    var count: Int
+                    while (inputStream.read(data).also { count = it } != -1) {
+                        total += count
+                        if (fileLength > 0) {
+                            downloadProgress.value = total.toFloat() / fileLength.toFloat()
+                            downloadingStatus.value = "İndiriliyor: %${(downloadProgress.value * 100).toInt()}"
+                        } else {
+                            downloadingStatus.value = "İndiriliyor... (${(total / 1024)} KB)"
+                        }
+                        outputStream.write(data, 0, count)
+                    }
+                    outputStream.flush()
+                }
+                inputStream.close()
+                
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    contentValues.clear()
+                    contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    resolver.update(uri, contentValues, null, null)
+                }
+                
+                MediaScannerConnection.scanFile(context, arrayOf(uri.toString()), null) { _, _ ->
+                    viewModelScope.launch {
+                        loadDeviceMedia()
+                        downloadingStatus.value = "İndirme Tamamlandı! Dosya galeriye eklendi."
+                        downloadProgress.value = 1.0f
+                        delay(2500)
+                        isDownloading.value = false
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                downloadingStatus.value = "İndirme Hatası: ${e.message}"
+                delay(3500)
+                isDownloading.value = false
+            }
         }
     }
 

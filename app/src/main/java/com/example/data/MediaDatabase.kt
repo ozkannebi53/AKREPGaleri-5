@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 
-@Entity(tableName = "media_files")
+@Entity(tableName = "media_files", indices = [Index(value = ["uri"], unique = true)])
 data class MediaFile(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val uri: String,
@@ -101,7 +101,7 @@ interface MediaDao {
     suspend fun deleteSubtitlesForMedia(mediaId: Int)
 }
 
-@Database(entities = [MediaFile::class, FaceGroup::class, SubtitleCache::class], version = 1, exportSchema = false)
+@Database(entities = [MediaFile::class, FaceGroup::class, SubtitleCache::class], version = 2, exportSchema = false)
 abstract class MediaDatabase : RoomDatabase() {
     abstract fun mediaDao(): MediaDao
 

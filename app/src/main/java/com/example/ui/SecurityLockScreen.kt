@@ -1,5 +1,7 @@
 package com.example.ui
 
+import androidx.fragment.app.FragmentActivity
+import com.example.data.BiometricAuthenticator
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -58,6 +60,10 @@ fun SecurityLockScreen(
     onUnlocked: () -> Unit
 ) {
     val context = LocalContext.current
+    val activity = context as? FragmentActivity
+    val biometricAuthenticator = remember(activity) {
+        activity?.let { BiometricAuthenticator(it) }
+    }
     val patternState by viewModel.patternEntered.collectAsState()
     val messageState by viewModel.unlockStatusMessage.collectAsState()
     val isErrorState by viewModel.isPatternError.collectAsState()
@@ -697,33 +703,63 @@ fun SecurityLockScreen(
                     }
                 }
 
-                // Animated scan routine
+                // Real BiometricPrompt integration with gorgeous fallback simulation
                 LaunchedEffect(showBiometricScanDialog) {
-                    scanningProgress = 0f
-                    scanningStatus = "Biyometrik sensörler başlatılıyor..."
-                    delay(800)
-                    
-                    scanningProgress = 0.3f
-                    scanningStatus = "Parmak izi deseni taranıyor..."
-                    delay(900)
-                    
-                    scanningProgress = 0.65f
-                    scanningStatus = "Akrep Kalkanı şifreleme eşleşmesi..."
-                    delay(800)
-                    
-                    scanningProgress = 0.9f
-                    scanningStatus = "Erişim protokolü doğrulanıyor..."
-                    delay(600)
-                    
-                    scanningProgress = 1.0f
-                    scanningStatus = "Erişim Onaylandı!"
-                    delay(500)
-                    
-                    showBiometricScanDialog = false
-                    viewModel.unlockStatusMessage.value = "Giriş Başarılı!"
-                    viewModel.isScreenLocked.value = false
-                    viewModel.isPatternError.value = false
-                    onUnlocked()
+                    if (showBiometricScanDialog) {
+                        scanningProgress = 0.1f
+                        scanningStatus = "Biyometrik sensörler başlatılıyor..."
+                        delay(500)
+                        
+                        if (biometricAuthenticator != null && biometricAuthenticator.isBiometricAvailable()) {
+                            scanningProgress = 0.3f
+                            scanningStatus = "Sistem biyometrik doğrulaması bekleniyor..."
+                            
+                            biometricAuthenticator.authenticate(
+                                title = "Akrep Kalkanı Klasörü",
+                                subtitle = "Güvenli Biyometrik Erişim",
+                                description = "Erişimi onaylamak için lütfen parmak izinizi okutun",
+                                onSuccess = {
+                                    scanningProgress = 0.8f
+                                    scanningStatus = "Eşleşme tamamlandı. Giriş yapılıyor..."
+                                    scanningProgress = 1.0f
+                                    scanningStatus = "Erişim Onaylandı!"
+                                    
+                                    viewModel.unlockStatusMessage.value = "Giriş Başarılı!"
+                                    viewModel.isScreenLocked.value = false
+                                    viewModel.isPatternError.value = false
+                                    showBiometricScanDialog = false
+                                    onUnlocked()
+                                },
+                                onError = { errorMsg ->
+                                    scanningStatus = "Doğrulama Hatası: $errorMsg"
+                                    scanningProgress = 0.0f
+                                }
+                            )
+                        } else {
+                            // Fallback simulation mode for testing in emulator environment (which has no fingerprint hardware/enrollment)
+                            scanningProgress = 0.3f
+                            scanningStatus = "Biyometrik donanım bulunamadı. (Simülasyon Aktif)"
+                            delay(1200)
+                            
+                            scanningProgress = 0.6f
+                            scanningStatus = "Parmak izi deseni taranıyor..."
+                            delay(1000)
+                            
+                            scanningProgress = 0.85f
+                            scanningStatus = "Akrep Kalkanı şifreleme eşleşmesi..."
+                            delay(800)
+                            
+                            scanningProgress = 1.0f
+                            scanningStatus = "Erişim Onaylandı! (Simüle)"
+                            delay(600)
+                            
+                            showBiometricScanDialog = false
+                            viewModel.unlockStatusMessage.value = "Giriş Başarılı (Simüle)!"
+                            viewModel.isScreenLocked.value = false
+                            viewModel.isPatternError.value = false
+                            onUnlocked()
+                        }
+                    }
                 }
             }
 
